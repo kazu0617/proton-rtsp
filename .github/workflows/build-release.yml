@@ -30,10 +30,13 @@ permissions:
   contents: write
 
 jobs:
-  build-release:
-    name: Build ${{ github.ref_name }}
+  resolve:
+    name: Resolve build inputs
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 2
+    outputs:
+      build_name: ${{ steps.vars.outputs.build_name }}
+      checkout_ref: ${{ steps.vars.outputs.checkout_ref }}
 
     steps:
       - name: Resolve build inputs
@@ -74,6 +77,13 @@ jobs:
           echo "build_name=${build_name}" >>"${GITHUB_OUTPUT}"
           echo "checkout_ref=${checkout_ref}" >>"${GITHUB_OUTPUT}"
 
+  build:
+    name: Build ${{ needs.resolve.outputs.build_name }}
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
       - name: Prepare host
         run: |
           sudo apt-get update
@@ -83,15 +93,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ccache-proton-${{ runner.os }}-${{ steps.vars.outputs.checkout_ref }}-${{ github.run_id }}
+          key: ccache-proton-${{ runner.os }}-${{ needs.resolve.outputs.checkout_ref }}-${{ github.run_id }}
           restore-keys: |
-            ccache-proton-${{ runner.os }}-${{ steps.vars.outputs.checkout_ref }}-
+            ccache-proton-${{ runner.os }}-${{ needs.resolve.outputs.checkout_ref }}-
             ccache-proton-${{ runner.os }}-
 
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.vars.outputs.checkout_ref }}
+          ref: ${{ needs.resolve.outputs.checkout_ref }}
           fetch-depth: 0
           fetch-tags: true
           submodules: recursive
@@ -101,7 +111,7 @@ jobs:
           mkdir build
           cd build
           ../configure.sh \
-            --build-name="${{ steps.vars.outputs.build_name }}" \
+            --build-name="${{ needs.resolve.outputs.build_name }}" \
             --enable-ccache \
             --container-engine=docker
 
@@ -112,20 +122,35 @@ jobs:
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.vars.outputs.build_name }}
+          name: ${{ needs.resolve.outputs.build_name }}
           path: |
-            build/${{ steps.vars.outputs.build_name }}.tar.gz
-            build/${{ steps.vars.outputs.build_name }}.sha512sum
+            build/${{ needs.resolve.outputs.build_name }}.tar.gz
+            build/${{ needs.resolve.outputs.build_name }}.sha512sum
+
+  release:
+    name: Release ${{ needs.resolve.outputs.build_name }}
+    needs:
+      - resolve
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Download workflow artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.resolve.outputs.build_name }}
+          path: dist
 
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          BUILD_NAME: ${{ steps.vars.outputs.build_name }}
+          BUILD_NAME: ${{ needs.resolve.outputs.build_name }}
         run: |
           gh release view "${BUILD_NAME}" >/dev/null 2>&1 || \
             gh release create "${BUILD_NAME}" --title "${BUILD_NAME}" --notes "Automated Proton RTSP build."
 
           gh release upload "${BUILD_NAME}" \
-            "build/${BUILD_NAME}.tar.gz" \
-            "build/${BUILD_NAME}.sha512sum" \
+            "dist/${BUILD_NAME}.tar.gz" \
+            "dist/${BUILD_NAME}.sha512sum" \
             --clobber
