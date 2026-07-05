@@ -90,7 +90,7 @@ jobs:
           sudo apt-get install -y ccache fontforge-nox
 
       - name: Restore ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.ccache
           key: ccache-proton-${{ runner.os }}-${{ needs.resolve.outputs.checkout_ref }}-${{ github.run_id }}
@@ -99,7 +99,7 @@ jobs:
             ccache-proton-${{ runner.os }}-
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ needs.resolve.outputs.checkout_ref }}
           fetch-depth: 0
