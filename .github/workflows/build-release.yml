@@ -81,7 +81,7 @@ jobs:
     name: Build ${{ needs.resolve.outputs.build_name }}
     needs: resolve
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
 
     steps:
       - name: Prepare host
