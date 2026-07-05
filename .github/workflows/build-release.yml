@@ -1,0 +1,131 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: "RTSP build variant"
+        required: true
+        default: "release-11"
+        type: choice
+        options:
+          - release-11
+          - experimental-11
+          - bleeding-edge
+      build_name:
+        description: "Release/build name. Defaults to a proton-rtsp-* name."
+        required: false
+        type: string
+      source_ref:
+        description: "Branch, tag, or SHA to check out. Defaults from variant."
+        required: false
+        type: string
+  push:
+    tags:
+      - "proton-rtsp-release-11-*"
+      - "proton-rtsp-experimental-11-*"
+      - "proton-rtsp-bleeding-edge-*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Resolve build inputs
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            build_name="${GITHUB_REF_NAME}"
+            checkout_ref="${GITHUB_REF_NAME}"
+          else
+            case "${{ inputs.variant }}" in
+              release-11)
+                default_name="proton-rtsp-release-11-${GITHUB_RUN_NUMBER}"
+                default_ref="rtsp/proton/proton_11.0"
+                ;;
+              experimental-11)
+                default_name="proton-rtsp-experimental-11-${GITHUB_RUN_NUMBER}"
+                default_ref="rtsp/proton/experimental_11.0"
+                ;;
+              bleeding-edge)
+                default_name="proton-rtsp-bleeding-edge-${GITHUB_RUN_NUMBER}"
+                default_ref="rtsp/proton/bleeding-edge"
+                ;;
+              *)
+                echo "Unknown variant: ${{ inputs.variant }}" >&2
+                exit 1
+                ;;
+            esac
+
+            build_name="${{ inputs.build_name }}"
+            checkout_ref="${{ inputs.source_ref }}"
+            build_name="${build_name:-${default_name}}"
+            checkout_ref="${checkout_ref:-${default_ref}}"
+          fi
+
+          echo "build_name=${build_name}" >>"${GITHUB_OUTPUT}"
+          echo "checkout_ref=${checkout_ref}" >>"${GITHUB_OUTPUT}"
+
+      - name: Prepare host
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache fontforge-nox
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-proton-${{ runner.os }}-${{ steps.vars.outputs.checkout_ref }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-proton-${{ runner.os }}-${{ steps.vars.outputs.checkout_ref }}-
+            ccache-proton-${{ runner.os }}-
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.vars.outputs.checkout_ref }}
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+
+      - name: Configure
+        run: |
+          mkdir build
+          cd build
+          ../configure.sh \
+            --build-name="${{ steps.vars.outputs.build_name }}" \
+            --enable-ccache \
+            --container-engine=docker
+
+      - name: Build redist
+        working-directory: ./build
+        run: make -j3 redist
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.vars.outputs.build_name }}
+          path: |
+            build/${{ steps.vars.outputs.build_name }}.tar.gz
+            build/${{ steps.vars.outputs.build_name }}.sha512sum
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_NAME: ${{ steps.vars.outputs.build_name }}
+        run: |
+          gh release view "${BUILD_NAME}" >/dev/null 2>&1 || \
+            gh release create "${BUILD_NAME}" --title "${BUILD_NAME}" --notes "Automated Proton RTSP build."
+
+          gh release upload "${BUILD_NAME}" \
+            "build/${BUILD_NAME}.tar.gz" \
+            "build/${BUILD_NAME}.sha512sum" \
+            --clobber
