@@ -119,13 +119,27 @@ jobs:
         working-directory: ./build
         run: make -j3 redist
 
+      - name: Package redist
+        working-directory: ./build
+        env:
+          BUILD_NAME: ${{ needs.resolve.outputs.build_name }}
+        run: |
+          set -euo pipefail
+          test -d redist
+          rm -rf "${BUILD_NAME}"
+          mv redist "${BUILD_NAME}"
+          tar -czf "${BUILD_NAME}.tar.gz" "${BUILD_NAME}"
+          sha512sum "${BUILD_NAME}.tar.gz" >"${BUILD_NAME}.sha512sum"
+
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ needs.resolve.outputs.build_name }}
           path: |
             build/${{ needs.resolve.outputs.build_name }}.tar.gz
             build/${{ needs.resolve.outputs.build_name }}.sha512sum
+          if-no-files-found: error
+          compression-level: 0
 
   release:
     name: Release ${{ needs.resolve.outputs.build_name }}
@@ -137,7 +151,7 @@ jobs:
 
     steps:
       - name: Download workflow artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.resolve.outputs.build_name }}
           path: dist
